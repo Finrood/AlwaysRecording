@@ -72,7 +72,8 @@ class RecordingViewModel @JvmOverloads constructor(
     val userDefinedFilename: StateFlow<String?> = _userDefinedFilename
 
     fun startRecording() {
-        if (!storageChecker.isStorageAvailable(getApplication(), getApplication<Application>().externalCacheDir)) {
+        val storageDir = getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)
+        if (!storageChecker.isStorageAvailable(getApplication(), storageDir)) {
             _error.value = UiError.Snackbar("Not enough storage available.")
             return
         }
@@ -82,7 +83,7 @@ class RecordingViewModel @JvmOverloads constructor(
             "standard_recording_${System.currentTimeMillis()}"
         }
         val fileName = "$baseFileName.${_selectedFormat.value.extension}"
-        outputFile = File(getApplication<Application>().externalCacheDir, fileName)
+        outputFile = File(storageDir, fileName)
 
         mediaRecorder = mediaRecorderFactory.create(getApplication(), _selectedFormat.value, outputFile!!).apply {
             try {
@@ -139,8 +140,8 @@ class RecordingViewModel @JvmOverloads constructor(
                     _error.value = UiError.Dialog("Save Error", "Selected SAF location is not valid or writable.")
                 }
             } else if (outputFile != null && outputFile!!.exists()) {
-                // If no SAF URI, but a temporary file exists, it means it was saved to cache.
-                Log.d("RecordingViewModel", "Recording saved to app cache: ${outputFile!!.absolutePath}")
+                // If no SAF URI, but the file exists, it means it was saved to the Music directory.
+                Log.d("RecordingViewModel", "Recording saved to storage: ${outputFile!!.absolutePath}")
             }
             outputFile = null // Clear the reference to the temporary file
         }

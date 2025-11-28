@@ -31,8 +31,11 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.io.File
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.runner.RunWith
 
 @ExperimentalCoroutinesApi
+@RunWith(AndroidJUnit4::class)
 class RecordingViewModelTest {
 
     @get:Rule
@@ -65,6 +68,7 @@ class RecordingViewModelTest {
         // Mock Application context behavior
         whenever(mockApplication.applicationContext).thenReturn(mockApplication)
         whenever(mockApplication.externalCacheDir).thenReturn(File("mock_cache_dir"))
+        whenever(mockApplication.getExternalFilesDir(any())).thenReturn(File("mock_music_dir"))
 
         // Mock SettingsRepository behavior
         whenever(mockSettingsRepository.saveDirectoryUri).thenReturn(MutableStateFlow(null))
@@ -129,26 +133,28 @@ class RecordingViewModelTest {
     }
 
     @Test
-    fun resumeRecording_resumesRecordingAndTimer() = runTest {
-        viewModel.startRecording()
-        testDispatcher.scheduler.runCurrent()
+    fun resumeRecording_resumesRecordingAndTimer() = runTest(testDispatcher) {
+        try {
+            viewModel.startRecording()
+            testDispatcher.scheduler.runCurrent()
 
-        doNothing().`when`(mockMediaRecorder).pause()
-        doNothing().`when`(mockMediaRecorder).resume()
+            doNothing().`when`(mockMediaRecorder).pause()
+            doNothing().`when`(mockMediaRecorder).resume()
 
-        viewModel.pauseRecording()
-        testDispatcher.scheduler.runCurrent()
+            viewModel.pauseRecording()
+            testDispatcher.scheduler.runCurrent()
 
-        viewModel.resumeRecording()
-        testDispatcher.scheduler.runCurrent()
+            viewModel.resumeRecording()
+            testDispatcher.scheduler.runCurrent()
 
-        assertFalse(viewModel.isPaused.first())
-        verify(mockMediaRecorder).resume()
-        val initialElapsedTime = viewModel.elapsedTime.first()
-        testDispatcher.scheduler.advanceTimeBy(5000) // Advance time by 5 seconds
-        assertTrue(viewModel.elapsedTime.first() > initialElapsedTime)
-
-        viewModel.stopRecording() // Cleanup
+            assertFalse(viewModel.isPaused.first())
+            verify(mockMediaRecorder).resume()
+            val initialElapsedTime = viewModel.elapsedTime.first()
+            testDispatcher.scheduler.advanceTimeBy(5000) // Advance time by 5 seconds
+            assertTrue(viewModel.elapsedTime.first() > initialElapsedTime)
+        } finally {
+            viewModel.stopRecording() // Cleanup
+        }
     }
 
     @Test

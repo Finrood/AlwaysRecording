@@ -187,6 +187,24 @@ class FileViewModel @JvmOverloads constructor(
         }
     }
 
+    fun openFile(recording: Recording) {
+        val context = getApplication<Application>()
+        val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
+        if (file.exists()) {
+            val uri = FileProvider.getUriForFile(context, "com.example.alwaysrecording.provider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "audio/wav")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: android.content.ActivityNotFoundException) {
+                // No app found to open the file
+            }
+        }
+    }
+
     fun deleteRecording(recording: Recording) {
         val file = File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
         if (file.exists()) {

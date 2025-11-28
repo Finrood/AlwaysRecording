@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
@@ -120,6 +121,9 @@ fun RecordingListItem(
             )
         }
         Row {
+            IconButton(onClick = { fileViewModel.openFile(recording) }) {
+                Icon(Icons.Default.ExitToApp, contentDescription = "Open")
+            }
             IconButton(onClick = { fileViewModel.shareRecording(recording) }) {
                 Icon(Icons.Default.Share, contentDescription = "Share")
             }

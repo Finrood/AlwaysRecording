@@ -1,0 +1,7 @@
+- Bug in always recording app:
+I changed save location of file.
+When I record manually start stop, I can see the file in the correct folder.
+When  i save the last x minutes, I cannot see those file in that folder.
+Also, when i click view recordings I can only see the recordings I did by clicking button save last x minutes. I cannot see the ones I did manually.
+
+- In the settings, when I change the length of save last x minutes, and I come back to the main screen, the always recording is now off and it was on before.
