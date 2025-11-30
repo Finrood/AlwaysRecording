@@ -180,6 +180,10 @@ class RecordingViewModel @JvmOverloads constructor(
     fun setSelectedFormat(format: RecordingFormat) {
         _selectedFormat.value = format
     }
+    
+    fun clearError() {
+        _error.value = null
+    }
 
     override fun onCleared() {
         super.onCleared()

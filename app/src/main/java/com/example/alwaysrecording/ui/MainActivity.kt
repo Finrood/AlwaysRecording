@@ -47,8 +47,14 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(error) {
                     error?.let {
                         when (it) {
-                            is UiError.Snackbar -> snackbarHostState.showSnackbar(it.message)
-                            is UiError.Toast -> android.widget.Toast.makeText(this@MainActivity, it.message, android.widget.Toast.LENGTH_SHORT).show()
+                            is UiError.Snackbar -> {
+                                snackbarHostState.showSnackbar(it.message)
+                                recordingViewModel.clearError()
+                            }
+                            is UiError.Toast -> {
+                                android.widget.Toast.makeText(this@MainActivity, it.message, android.widget.Toast.LENGTH_SHORT).show()
+                                recordingViewModel.clearError()
+                            }
                             is UiError.Dialog -> showErrorDialog = it
                         }
                     }
@@ -56,11 +62,17 @@ class MainActivity : ComponentActivity() {
 
                 if (showErrorDialog != null) {
                     AlertDialog(
-                        onDismissRequest = { showErrorDialog = null },
+                        onDismissRequest = { 
+                            showErrorDialog = null
+                            recordingViewModel.clearError()
+                        },
                         title = { Text(showErrorDialog!!.title) },
                         text = { Text(showErrorDialog!!.message) },
                         confirmButton = {
-                            TextButton(onClick = { showErrorDialog = null }) {
+                            TextButton(onClick = { 
+                                showErrorDialog = null
+                                recordingViewModel.clearError()
+                            }) {
                                 Text("OK")
                             }
                         }

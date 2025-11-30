@@ -254,12 +254,19 @@ class ReplayRecorderService : LifecycleService() {
     }
 
     private suspend fun loadSettingsAndApply() {
-        currentSampleRate = settingsRepository.sampleRateHz.first()
-        currentBufferMinutes = settingsRepository.bufferLengthMinutes.first()
-        isAutoStartEnabled = settingsRepository.autoStartEnabled.first()
-        currentChannels = settingsRepository.channels.first()
-        currentBitDepth = settingsRepository.bitDepth.first()
-        Log.i(TAG, "Settings loaded: Rate=$currentSampleRate Hz, Buffer=$currentBufferMinutes min, AutoStart=$isAutoStartEnabled, Channels=$currentChannels, BitDepth=$currentBitDepth")
+        try {
+            currentSampleRate = settingsRepository.sampleRateHz.first()
+            currentBufferMinutes = settingsRepository.bufferLengthMinutes.first()
+            isAutoStartEnabled = settingsRepository.autoStartEnabled.first()
+            currentChannels = settingsRepository.channels.first()
+            currentBitDepth = settingsRepository.bitDepth.first()
+            Log.i(TAG, "Settings loaded: Rate=$currentSampleRate Hz, Buffer=$currentBufferMinutes min, AutoStart=$isAutoStartEnabled, Channels=$currentChannels, BitDepth=$currentBitDepth")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading settings from DataStore", e)
+            // Fallback to defaults is already handled by the Repository's map operator with '?: DEFAULT',
+            // but if the flow itself fails (e.g. corruption reading file), we might need safe defaults here if vars aren't init.
+            // Since they are initialized with defaults in declaration, we are safe from uninitialized vars.
+        }
         // If not recording and settings changed, re-initialize buffer on next start automatically.
     }
 

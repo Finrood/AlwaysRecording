@@ -72,6 +72,16 @@ object WavWriter {
                     // Size of audio data chunk
                     val audioChunkSize = audioDataLength
 
+                    // Check for WAV size limit (approx 4GB max for unsigned 32-bit int)
+                    // Standard WAV uses 32-bit int for size. Java's randomAccessFile.write(header) writes bytes.
+                    // If size > Int.MAX_VALUE, toInt() returns negative, which when written as bytes is correct for unsigned interpretation up to 4GB.
+                    // However, > 4GB will definitely fail/wrap.
+                    if (overallFileSize > 0xFFFFFFFFL) {
+                        Log.e(TAG, "File size exceeds WAV format limit (4GB). File may be corrupt or unplayable.")
+                        // Ideally, we should use RF64 format for > 4GB, but that's a larger change.
+                        // For now, we warn and proceed, but the header will contain wrapped values.
+                    }
+
                     writeWavHeader(
                         randomAccessFile,
                         overallFileSize,
