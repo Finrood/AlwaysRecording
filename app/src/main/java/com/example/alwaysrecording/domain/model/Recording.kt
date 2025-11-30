@@ -6,5 +6,6 @@ data class Recording(
     val timestamp: Long,
     val duration: Long,
     val size: Long,
-    val tags: List<String> = emptyList() // New field
+    val tags: List<String> = emptyList(),
+    val fileUri: String = "" // URI string for the file (FileProvider or SAF)
 )

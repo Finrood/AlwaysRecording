@@ -264,12 +264,11 @@ class ReplayRecorderService : LifecycleService() {
     }
 
     private fun onRuntimeSettingChange(settingName: String) {
-        Log.i(TAG, "$settingName changed while recording. Stopping recording. Please restart to apply changes.")
-        // To apply new settings like sample rate or fundamental buffer size,
-        // recording needs to be restarted.
-        _internalRecorderState.value = RecorderState.Error("Settings changed. Restart needed.")
-        handleStopRecording(stopService = false) // Stop recording, but keep service alive for user to restart
-        // Optionally, inform the user via a persistent notification update or a toast via UI.
+        Log.i(TAG, "$settingName changed while recording. Restarting recording to apply changes.")
+        // Stop recording, but keep service alive.
+        handleStopRecording(stopService = false)
+        // Immediately restart to apply new settings (buffer size, sample rate, etc.)
+        handleStartRecording()
     }
 
 
@@ -492,9 +491,42 @@ class ReplayRecorderService : LifecycleService() {
                 currentBitDepth.toShort()
             )
 
+            // Check for custom save location (SAF)
+            val saveUriString = settingsRepository.saveDirectoryUri.firstOrNull()
+            var finalFile: File? = outputFile
+            var savedToSaf = false
+
+            if (success && !saveUriString.isNullOrEmpty()) {
+                try {
+                    val treeUri = Uri.parse(saveUriString)
+                    val pickedDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(applicationContext, treeUri)
+                    if (pickedDir != null && pickedDir.exists() && pickedDir.isDirectory && pickedDir.canWrite()) {
+                        val newFile = pickedDir.createFile("audio/wav", fileName)
+                        if (newFile != null) {
+                            contentResolver.openOutputStream(newFile.uri)?.use { outputStream ->
+                                outputFile.inputStream().use { inputStream ->
+                                    inputStream.copyTo(outputStream)
+                                }
+                            }
+                            Log.i(TAG, "Replay copied to SAF: ${newFile.uri}")
+                            outputFile.delete() // Delete internal copy
+                            finalFile = null // It's now in SAF, not a direct File object we can easily ref for path logging if needed, or use newFile.uri
+                            savedToSaf = true
+                        } else {
+                             Log.e(TAG, "Failed to create file in SAF directory.")
+                        }
+                    } else {
+                         Log.e(TAG, "SAF directory invalid or not writable.")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error saving to SAF location", e)
+                }
+            }
+
             withContext(Dispatchers.Main) {
                 if (success) {
-                    Log.i(TAG, "Replay saved successfully: ${outputFile.absolutePath}")
+                    val locationMsg = if (savedToSaf) "external storage" else outputFile.absolutePath
+                    Log.i(TAG, "Replay saved successfully to $locationMsg")
                     // Decide if buffer should be cleared after save.
                     // For a continuous replay buffer, it should NOT be cleared by save.
                     // It's cleared/overwritten by new recordings or when settings change significantly.

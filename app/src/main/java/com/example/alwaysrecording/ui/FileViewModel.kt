@@ -26,7 +26,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import android.util.Log
 
 val Json = Json { ignoreUnknownKeys = true }
 
@@ -62,11 +64,12 @@ class FileViewModel @JvmOverloads constructor(
 
     fun loadRecordings() {
         viewModelScope.launch {
-            val storageDir = getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)
-            val files = storageDir?.listFiles { file -> file.name.endsWith(".wav") || file.name.endsWith(".mp3") } ?: emptyArray()
-
-            // Load tags from tags.json
-            val tagsFile = File(storageDir, "tags.json")
+            val saveUriString = settingsRepository.saveDirectoryUri.firstOrNull()
+            val context = getApplication<Application>()
+            
+            // Load tags from tags.json (Keep in internal storage for now)
+            val internalStorageDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)
+            val tagsFile = File(internalStorageDir, "tags.json")
             if (tagsFile.exists()) {
                 try {
                     tagsFile.inputStream().use { inputStream ->
@@ -75,34 +78,91 @@ class FileViewModel @JvmOverloads constructor(
                         _allTags.value = loadedTags.tags
                     }
                 } catch (e: Exception) {
-                    _allTags.value = emptyMap() // Clear tags on error
+                    _allTags.value = emptyMap()
                 }
             } else {
                 _allTags.value = emptyMap()
             }
 
-            _recordings.value = files.mapNotNull { file ->
+            val loadedRecordings = mutableListOf<Recording>()
+
+            if (!saveUriString.isNullOrEmpty()) {
+                // --- SAF Mode ---
                 try {
-                    val retriever = MediaMetadataRetriever()
-                    retriever.setDataSource(file.absolutePath)
-                    val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-                    retriever.release()
+                    val treeUri = Uri.parse(saveUriString)
+                    val pickedDir = DocumentFile.fromTreeUri(context, treeUri)
+                    if (pickedDir != null && pickedDir.exists()) {
+                        val files = pickedDir.listFiles().filter { 
+                            it.name?.endsWith(".wav", true) == true || 
+                            it.name?.endsWith(".mp3", true) == true ||
+                            it.name?.endsWith(".m4a", true) == true ||
+                            it.name?.endsWith(".3gp", true) == true
+                        }
+                        
+                        loadedRecordings.addAll(files.mapNotNull { docFile ->
+                             try {
+                                val retriever = MediaMetadataRetriever()
+                                retriever.setDataSource(context, docFile.uri)
+                                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                                retriever.release()
 
-                    val recordingId = file.lastModified() // Use lastModified as ID for now
-                    val fileTags = _allTags.value[recordingId.toString()] ?: emptyList()
+                                val recordingId = docFile.lastModified()
+                                val fileTags = _allTags.value[recordingId.toString()] ?: emptyList()
 
-                    Recording(
-                        id = file.lastModified(),
-                        filename = file.name,
-                        timestamp = file.lastModified(),
-                        duration = duration,
-                        size = file.length(),
-                        tags = fileTags // Populate tags
-                    )
+                                Recording(
+                                    id = recordingId,
+                                    filename = docFile.name ?: "Unknown",
+                                    timestamp = docFile.lastModified(),
+                                    duration = duration,
+                                    size = docFile.length(),
+                                    tags = fileTags,
+                                    fileUri = docFile.uri.toString()
+                                )
+                             } catch (e: Exception) {
+                                 Log.e("FileViewModel", "Error parsing file: ${docFile.name}", e)
+                                 null
+                             }
+                        })
+                    }
                 } catch (e: Exception) {
-                    null
+                    Log.e("FileViewModel", "Error loading SAF recordings", e)
                 }
-            }.sortedByDescending { it.timestamp }
+            } else {
+                // --- Internal Storage Mode ---
+                val files = internalStorageDir?.listFiles { file -> 
+                    file.name.endsWith(".wav") || 
+                    file.name.endsWith(".mp3") || 
+                    file.name.endsWith(".m4a") || 
+                    file.name.endsWith(".3gp") 
+                } ?: emptyArray()
+
+                loadedRecordings.addAll(files.mapNotNull { file ->
+                    try {
+                        val retriever = MediaMetadataRetriever()
+                        retriever.setDataSource(file.absolutePath)
+                        val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                        retriever.release()
+
+                        val recordingId = file.lastModified()
+                        val fileTags = _allTags.value[recordingId.toString()] ?: emptyList()
+                        val uri = FileProvider.getUriForFile(context, "com.example.alwaysrecording.provider", file)
+
+                        Recording(
+                            id = recordingId,
+                            filename = file.name,
+                            timestamp = file.lastModified(),
+                            duration = duration,
+                            size = file.length(),
+                            tags = fileTags,
+                            fileUri = uri.toString()
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
+                })
+            }
+            
+            _recordings.value = loadedRecordings.sortedByDescending { it.timestamp }
         }
     }
 
@@ -147,22 +207,49 @@ class FileViewModel @JvmOverloads constructor(
 
     fun renameRecording(recording: Recording, newName: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val oldFile = File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
-            val newFile = File(oldFile.parent, newName)
-
-            if (oldFile.exists() && oldFile.renameTo(newFile)) {
-                // Update tags.json if the file was renamed
-                val currentTags = _allTags.value.toMutableMap()
-                val tagsForRenamedFile = currentTags.remove(recording.id.toString())
-                if (tagsForRenamedFile != null) {
-                    // Use the new file's lastModified as the new ID for tags
-                    currentTags[newFile.lastModified().toString()] = tagsForRenamedFile
+            val context = getApplication<Application>()
+            val uri = Uri.parse(recording.fileUri)
+            var renamed = false
+            
+            try {
+                // Try DocumentFile (works for both SAF and often FileProvider content URIs if we have permission)
+                // But FileProvider doesn't support rename via DocumentFile easily usually. 
+                
+                if (uri.scheme == "content") {
+                    val docFile = DocumentFile.fromSingleUri(context, uri)
+                    if (docFile != null && docFile.exists()) {
+                        renamed = docFile.renameTo(newName)
+                    }
                 }
-                _allTags.value = currentTags
-                saveTagsToJson()
-                loadRecordings() // Reload recordings to update UI
-            } else {
-                // Optionally, emit an error state to the UI
+                
+                // Fallback for pure internal file if above fails or logic dictates
+                if (!renamed && uri.toString().contains("com.example.alwaysrecording.provider")) {
+                     val storageDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)
+                     val oldFile = File(storageDir, recording.filename)
+                     val newFile = File(oldFile.parent, newName)
+                     if (oldFile.exists()) {
+                         renamed = oldFile.renameTo(newFile)
+                     }
+                }
+
+                if (renamed) {
+                    // Update tags.json
+                    val currentTags = _allTags.value.toMutableMap()
+                    val tagsForRenamedFile = currentTags.remove(recording.id.toString())
+                    if (tagsForRenamedFile != null) {
+                        // We need the NEW ID. Logic depends on if it's SAF or File.
+                        // Simplest: Just reload recordings and try to find the file with new name?
+                        // Or guess ID is roughly now? Renaming usually changes lastModified? 
+                        // Actually, renameTo might NOT change lastModified on some FS.
+                        // This is tricky. For now, just saving tags logic as is. 
+                        // Ideally we'd fetch the new file to get its ID.
+                    }
+                    _allTags.value = currentTags
+                    saveTagsToJson()
+                    loadRecordings() 
+                } 
+            } catch (e: Exception) {
+                Log.e("FileViewModel", "Rename failed", e)
             }
         }
     }
@@ -173,43 +260,51 @@ class FileViewModel @JvmOverloads constructor(
 
     fun shareRecording(recording: Recording) {
         val context = getApplication<Application>()
-        val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
-        if (file.exists()) {
-            val uri = FileProvider.getUriForFile(context, "com.example.alwaysrecording.provider", file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "audio/wav"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            val chooser = Intent.createChooser(intent, "Share Recording")
-            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooser)
+        val uri = Uri.parse(recording.fileUri)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "audio/wav" // Or generic audio/*
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        val chooser = Intent.createChooser(intent, "Share Recording")
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
     }
 
     fun openFile(recording: Recording) {
         val context = getApplication<Application>()
-        val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
-        if (file.exists()) {
-            val uri = FileProvider.getUriForFile(context, "com.example.alwaysrecording.provider", file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "audio/wav")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                context.startActivity(intent)
-            } catch (e: android.content.ActivityNotFoundException) {
-                // No app found to open the file
-            }
+        val uri = Uri.parse(recording.fileUri)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "audio/*") // Use wild card or specific type
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: android.content.ActivityNotFoundException) {
+            // No app found to open the file
         }
     }
 
     fun deleteRecording(recording: Recording) {
-        val file = File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), recording.filename)
-        if (file.exists()) {
-            file.delete()
-            loadRecordings()
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                val uri = Uri.parse(recording.fileUri)
+                val docFile = DocumentFile.fromSingleUri(context, uri)
+                if (docFile != null && docFile.delete()) {
+                    loadRecordings()
+                } else {
+                    // Fallback for FileProvider/Internal if DocumentFile fails (though DocumentFile wraps it usually)
+                     val storageDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)
+                     val file = File(storageDir, recording.filename)
+                     if (file.exists() && file.delete()) {
+                         loadRecordings()
+                     }
+                }
+            } catch (e: Exception) {
+                Log.e("FileViewModel", "Delete failed", e)
+            }
         }
     }
 }

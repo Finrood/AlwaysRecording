@@ -18,6 +18,8 @@ import org.mockito.MockitoAnnotations
 import org.robolectric.Shadows
 import java.io.File
 
+import androidx.core.content.FileProvider
+
 @RunWith(AndroidJUnit4::class)
 class FileViewModelRobolectricTest {
 
@@ -45,12 +47,20 @@ class FileViewModelRobolectricTest {
         val testFile = File(storageDir, "test_recording.wav")
         testFile.createNewFile()
 
+        // Generate a valid URI for the test file
+        val fileUri = FileProvider.getUriForFile(
+            context,
+            "com.example.alwaysrecording.provider",
+            testFile
+        )
+
         val recording = Recording(
             id = 1L,
             filename = "test_recording.wav",
             timestamp = System.currentTimeMillis(),
             duration = 1000L,
-            size = 1024L
+            size = 1024L,
+            fileUri = fileUri.toString()
         )
 
         // 2. Act
@@ -60,7 +70,11 @@ class FileViewModelRobolectricTest {
         val expectedIntent = Shadows.shadowOf(context as Application).nextStartedActivity
         assertNotNull("Intent should not be null", expectedIntent)
         assertEquals(Intent.ACTION_VIEW, expectedIntent.action)
-        assertEquals("audio/wav", expectedIntent.type)
+        // The type might be audio/wav or audio/* depending on implementation. 
+        // New impl uses audio/*, test expected audio/wav. Let's check implementation.
+        // Implementation: setDataAndType(uri, "audio/*")
+        assertEquals("audio/*", expectedIntent.type)
+        assertEquals(fileUri, expectedIntent.data)
         
         // Verify flags
         // Note: We check if the required flags are set. The intent might have other flags.
