@@ -23,4 +23,8 @@ interface SettingsRepository {
 
     val bitDepth: Flow<Int>
     suspend fun setBitDepth(bitDepth: Int)
+
+    // Internal state persistence for recovery
+    val isRecording: Flow<Boolean>
+    suspend fun setIsRecording(isRecording: Boolean)
 }

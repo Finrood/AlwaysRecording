@@ -36,9 +36,10 @@ class BootReceiver : BroadcastReceiver() {
                 try {
                     val settingsRepo = DataStoreSettingsRepository(context)
                     val autoStart = settingsRepo.autoStartEnabled.first()
+                    val wasRecording = settingsRepo.isRecording.first()
                     
-                    if (autoStart) {
-                        Log.i(TAG, "Auto-start enabled. Starting ReplayRecorderService.")
+                    if (autoStart || wasRecording) {
+                        Log.i(TAG, "Auto-start or recovery enabled. Starting ReplayRecorderService.")
                         val serviceIntent = ReplayRecorderService.newStartIntent(context)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             context.startForegroundService(serviceIntent)

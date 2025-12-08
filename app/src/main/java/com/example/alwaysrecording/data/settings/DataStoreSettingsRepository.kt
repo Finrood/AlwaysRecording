@@ -23,6 +23,7 @@ class DataStoreSettingsRepository(private val context: Context) : SettingsReposi
         val CHANNELS = intPreferencesKey("channels")
         val BIT_DEPTH = intPreferencesKey("bit_depth")
         val SAVE_DIRECTORY_URI = stringPreferencesKey("save_directory_uri")
+        val IS_RECORDING = booleanPreferencesKey("is_recording")
     }
 
     companion object {
@@ -33,6 +34,7 @@ class DataStoreSettingsRepository(private val context: Context) : SettingsReposi
         const val DEFAULT_CHANNELS = 1 // Mono
         const val DEFAULT_BIT_DEPTH = 16 // 16-bit PCM
         val DEFAULT_SAVE_DIRECTORY_URI: String? = null // Changed to val
+        const val DEFAULT_IS_RECORDING = false
     }
 
     override val bufferLengthMinutes: Flow<Int> = context.dataStore.data
@@ -113,6 +115,17 @@ class DataStoreSettingsRepository(private val context: Context) : SettingsReposi
     override suspend fun setBitDepth(bitDepth: Int) {
         context.dataStore.edit { settings ->
             settings[PreferencesKeys.BIT_DEPTH] = bitDepth
+        }
+    }
+
+    override val isRecording: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[PreferencesKeys.IS_RECORDING] ?: DEFAULT_IS_RECORDING
+        }
+
+    override suspend fun setIsRecording(isRecording: Boolean) {
+        context.dataStore.edit { settings ->
+            settings[PreferencesKeys.IS_RECORDING] = isRecording
         }
     }
 }

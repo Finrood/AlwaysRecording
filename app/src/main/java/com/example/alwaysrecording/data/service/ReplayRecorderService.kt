@@ -134,15 +134,20 @@ class ReplayRecorderService : LifecycleService() {
             ACTION_SAVE_REPLAY -> handleSaveReplay()
             ACTION_UPDATE_SETTINGS -> lifecycleScope.launch { loadSettingsAndApply() } // e.g. after settings change
             else -> {
-                Log.w(TAG, "Unknown or null action received. Current autoStart: $isAutoStartEnabled")
-                // If service is restarted by system (START_STICKY) and auto-start is on
-                if (action == null && isAutoStartEnabled && _internalRecorderState.value is RecorderState.Idle) {
-                    Log.i(TAG, "Service restarted by system, attempting auto-start.")
-                    handleStartRecording()
-                } else if (action == null && _internalRecorderState.value !is RecorderState.Recording) {
-                    Log.i(TAG, "Service restarted by system, but not auto-starting or already handled.")
-                    // If not recording and no action, maybe stopSelf if not sticky?
-                    // For START_STICKY, it's expected to stay alive.
+                Log.w(TAG, "Unknown or null action received.")
+                // If service is restarted by system (START_STICKY)
+                if (action == null && _internalRecorderState.value is RecorderState.Idle) {
+                    lifecycleScope.launch {
+                        val wasRecording = settingsRepository.isRecording.first()
+                        Log.i(TAG, "Service restarted by system. AutoStart: $isAutoStartEnabled, WasRecording: $wasRecording")
+                        
+                        if (isAutoStartEnabled || wasRecording) {
+                            Log.i(TAG, "Resuming recording from persistent state.")
+                            handleStartRecording()
+                        } else {
+                            Log.i(TAG, "No resume condition met. Remaining idle.")
+                        }
+                    }
                 }
             }
         }
@@ -293,7 +298,7 @@ class ReplayRecorderService : LifecycleService() {
 
     private suspend fun restartRecording() {
         val jobToJoin = recordingJob
-        handleStopRecording(stopService = false)
+        handleStopRecording(stopService = false, updatePersistence = false)
         if (jobToJoin != null) {
             Log.d(TAG, "Waiting for previous recording job to finish...")
             jobToJoin.join()
@@ -319,6 +324,7 @@ class ReplayRecorderService : LifecycleService() {
 
         Log.i(TAG, "Attempting to start recording... Rate=$currentSampleRate Hz, Buffer=$currentBufferMinutes min")
         _internalRecorderState.value = RecorderState.Recording // Set state before starting foreground
+        lifecycleScope.launch { settingsRepository.setIsRecording(true) }
 
         // Initialize AudioRingBuffer based on current settings
         val bufferSizeBytes = calculateBufferSizeInBytes(currentSampleRate, currentBufferMinutes)
@@ -438,7 +444,7 @@ class ReplayRecorderService : LifecycleService() {
         }
     }
 
-    private fun handleStopRecording(stopService: Boolean = true) {
+    private fun handleStopRecording(stopService: Boolean = true, updatePersistence: Boolean = true) {
         Log.i(TAG, "Attempting to stop recording. Stop service: $stopService")
         if (_internalRecorderState.value !is RecorderState.Recording && _internalRecorderState.value !is RecorderState.Error) {
             // If already idle or saving, or some other non-recording state, this might be a redundant call
@@ -465,6 +471,9 @@ class ReplayRecorderService : LifecycleService() {
         }
 
         _internalRecorderState.value = RecorderState.Idle
+        if (updatePersistence) {
+            lifecycleScope.launch { settingsRepository.setIsRecording(false) }
+        }
 
         if (stopService) {
             Log.d(TAG, "Stopping foreground service and self.")
