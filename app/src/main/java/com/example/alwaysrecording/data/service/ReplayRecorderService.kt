@@ -64,6 +64,7 @@ class ReplayRecorderService : LifecycleService() {
     private var audioRingBuffer: AudioRingBuffer? = null
     private var recordingJob: Job? = null
     private val isSaving = AtomicBoolean(false) // Prevent concurrent save operations
+    private var wakeLock: android.os.PowerManager.WakeLock? = null // Added WakeLock
 
     // --- Current Configuration (Loaded from SettingsRepository) ---
     private var currentSampleRate: Int = DataStoreSettingsRepository.DEFAULT_SAMPLE_RATE_HZ
@@ -105,6 +106,11 @@ class ReplayRecorderService : LifecycleService() {
         clock = SystemClock()
 
         Log.i(TAG, "Service Created. SDK: ${Build.VERSION.SDK_INT}")
+        
+        // Initialize WakeLock
+        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock = powerManager.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "AlwaysRecording::ReplayServiceWakeLock")
+        
         createNotificationChannel()
         observeSettings()
 
@@ -153,6 +159,16 @@ class ReplayRecorderService : LifecycleService() {
         Log.i(TAG, "Service Destroyed")
         cleanUpRecordingResources()
         recordingJob?.cancel() // Ensure coroutine is cancelled
+        
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.w(TAG, "WakeLock released in onDestroy (was held).")
+            }
+        } catch (e: Exception) {
+             Log.e(TAG, "Error releasing WakeLock in onDestroy", e)
+        }
+        
         _internalRecorderState.value = RecorderState.Idle // Final state update
         super.onDestroy()
     }
@@ -270,11 +286,20 @@ class ReplayRecorderService : LifecycleService() {
         // If not recording and settings changed, re-initialize buffer on next start automatically.
     }
 
-    private fun onRuntimeSettingChange(settingName: String) {
+    private suspend fun onRuntimeSettingChange(settingName: String) {
         Log.i(TAG, "$settingName changed while recording. Restarting recording to apply changes.")
-        // Stop recording, but keep service alive.
+        restartRecording()
+    }
+
+    private suspend fun restartRecording() {
+        val jobToJoin = recordingJob
         handleStopRecording(stopService = false)
-        // Immediately restart to apply new settings (buffer size, sample rate, etc.)
+        if (jobToJoin != null) {
+            Log.d(TAG, "Waiting for previous recording job to finish...")
+            jobToJoin.join()
+        }
+        // Small buffer to ensure AudioRecord release propagation if async in native layer
+        delay(100)
         handleStartRecording()
     }
 
@@ -297,8 +322,20 @@ class ReplayRecorderService : LifecycleService() {
 
         // Initialize AudioRingBuffer based on current settings
         val bufferSizeBytes = calculateBufferSizeInBytes(currentSampleRate, currentBufferMinutes)
-        audioRingBuffer = AudioRingBuffer(bufferSizeBytes, bytesPerFrame)
-        Log.d(TAG, "AudioRingBuffer initialized. Capacity: $bufferSizeBytes bytes for $currentBufferMinutes minutes.")
+        try {
+            audioRingBuffer = AudioRingBuffer(bufferSizeBytes, bytesPerFrame)
+            Log.d(TAG, "AudioRingBuffer initialized. Capacity: $bufferSizeBytes bytes for $currentBufferMinutes minutes.")
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "OOM while initializing AudioRingBuffer with size: $bufferSizeBytes", e)
+            _internalRecorderState.value = RecorderState.Error("Out of memory. Try reducing buffer length.")
+            cleanUpRecordingResources()
+            return
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Runtime error initializing buffer: ${e.message}", e)
+            _internalRecorderState.value = RecorderState.Error("Buffer initialization failed: ${e.message}")
+            cleanUpRecordingResources()
+            return
+        }
 
         val minSystemBufferSize = AudioRecord.getMinBufferSize(currentSampleRate, channelConfig, audioFormat)
         if (minSystemBufferSize == AudioRecord.ERROR_BAD_VALUE || minSystemBufferSize == AudioRecord.ERROR) {
@@ -337,6 +374,12 @@ class ReplayRecorderService : LifecycleService() {
         // Start foreground service before starting actual recording operations
         // This is crucial for Android 8+ background restrictions
         startForegroundServiceNotification()
+        
+        // Acquire WakeLock
+        if (wakeLock?.isHeld != true) {
+            wakeLock?.acquire(10 * 60 * 60 * 1000L) // 10 hours max safety timeout, though it should be released by stop
+            Log.d(TAG, "WakeLock acquired.")
+        }
 
         recordingJob = lifecycleScope.launch(Dispatchers.IO) { // IO for blocking AudioRecord.read
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) // Request higher priority for audio thread
@@ -410,6 +453,16 @@ class ReplayRecorderService : LifecycleService() {
         recordingJob = null // Nullify the job reference
 
         cleanUpRecordingResources() // Release AudioRecord, etc.
+        
+        // Release WakeLock
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing WakeLock", e)
+        }
 
         _internalRecorderState.value = RecorderState.Idle
 
@@ -562,7 +615,12 @@ class ReplayRecorderService : LifecycleService() {
     // --- Utility and Resource Management ---
     private fun calculateBufferSizeInBytes(sampleRate: Int, durationMinutes: Int): Int {
         if (durationMinutes <= 0) return calculateFramesToBytes(sampleRate, 60 * 5) // Default 5s if invalid
-        return sampleRate * bytesPerFrame * durationMinutes * 60
+        val sizeLong = sampleRate.toLong() * bytesPerFrame * durationMinutes * 60
+        if (sizeLong > Int.MAX_VALUE - 1024) {
+             Log.w(TAG, "Requested buffer size too large: $sizeLong. Clamping to Int.MAX_VALUE - 1024.")
+             return Int.MAX_VALUE - 1024
+        }
+        return sizeLong.toInt()
     }
 
     private fun calculateFramesToBytes(sampleRate: Int, durationMillis: Int): Int {

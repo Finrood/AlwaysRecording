@@ -109,7 +109,12 @@ class AudioRingBuffer(
             if (size == 0) {
                 return 0
             }
-            dataToWrite = ByteArray(size)
+            try {
+                dataToWrite = ByteArray(size)
+            } catch (e: OutOfMemoryError) {
+                Log.e(TAG, "OOM during snapshot allocation", e)
+                throw IOException("Not enough memory to create snapshot", e)
+            }
 
             // Copy logic adapted to write to dataToWrite
             // If buffer hasn't wrapped around (writePosition is ahead of readPosition)

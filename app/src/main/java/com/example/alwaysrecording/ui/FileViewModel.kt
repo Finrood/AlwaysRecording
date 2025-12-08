@@ -92,14 +92,21 @@ class FileViewModel @JvmOverloads constructor(
                     val treeUri = Uri.parse(saveUriString)
                     val pickedDir = DocumentFile.fromTreeUri(context, treeUri)
                     if (pickedDir != null && pickedDir.exists()) {
-                        val files = pickedDir.listFiles().filter { 
-                            it.name?.endsWith(".wav", true) == true || 
-                            it.name?.endsWith(".mp3", true) == true ||
-                            it.name?.endsWith(".m4a", true) == true ||
-                            it.name?.endsWith(".3gp", true) == true
+                        val files = pickedDir.listFiles()
+                        Log.d("FileViewModel", "SAF: Found ${files.size} files in directory: ${pickedDir.uri}")
+
+                        val filteredFiles = files.filter {
+                            val name = it.name ?: ""
+                            val isAudio = name.endsWith(".wav", true) ||
+                                          name.endsWith(".mp3", true) ||
+                                          name.endsWith(".m4a", true) ||
+                                          name.endsWith(".3gp", true)
+                            if (!isAudio) Log.v("FileViewModel", "SAF: Ignoring file: $name")
+                            isAudio
                         }
-                        
-                        loadedRecordings.addAll(files.mapNotNull { docFile ->
+                        Log.d("FileViewModel", "SAF: Loading ${filteredFiles.size} audio files.")
+
+                        loadedRecordings.addAll(filteredFiles.mapNotNull { docFile ->
                              try {
                                 val retriever = MediaMetadataRetriever()
                                 retriever.setDataSource(context, docFile.uri)

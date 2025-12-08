@@ -88,11 +88,12 @@ class RecordingViewModel @JvmOverloads constructor(
         mediaRecorder = mediaRecorderFactory.create(getApplication(), _selectedFormat.value, outputFile!!).apply {
             try {
                 prepare()
-            } catch (e: IOException) {
-                _error.value = UiError.Dialog("Error preparing recorder", e.message ?: "")
+                start()
+            } catch (e: Exception) {
+                Log.e("RecordingViewModel", "Error starting recorder", e)
+                _error.value = UiError.Dialog("Recording Error", "Failed to start recording: ${e.message}")
                 return
             }
-            start()
         }
         _isRecording.value = true
         startTimer()
@@ -109,26 +110,32 @@ class RecordingViewModel @JvmOverloads constructor(
         stopTimer()
         _elapsedTime.value = 0
 
+        val currentOutputFile = outputFile
+        
         // Handle saving to SAF if a URI is set
         viewModelScope.launch(Dispatchers.IO) {
             val saveUriString = settingsRepository.saveDirectoryUri.firstOrNull()
-            if (!saveUriString.isNullOrEmpty() && outputFile != null && outputFile!!.exists()) {
+            if (!saveUriString.isNullOrEmpty() && currentOutputFile != null && currentOutputFile.exists()) {
                 val contentResolver = getApplication<Application>().contentResolver
                 val treeUri = Uri.parse(saveUriString)
                 val pickedDir = DocumentFile.fromTreeUri(getApplication<Application>(), treeUri)
 
                 if (pickedDir != null && pickedDir.exists() && pickedDir.isDirectory && pickedDir.canWrite()) {
-                    val newFile = pickedDir.createFile("audio/${_selectedFormat.value.extension}", outputFile!!.name)
+                    val mimeType = when (_selectedFormat.value) {
+                        RecordingFormat.M4A -> "audio/mp4"
+                        RecordingFormat.THREE_GPP -> "audio/3gpp"
+                    }
+                    val newFile = pickedDir.createFile(mimeType, currentOutputFile.name)
                     if (newFile != null) {
                         try {
                             contentResolver.openOutputStream(newFile.uri)?.use { outputStream ->
-                                outputFile!!.inputStream().use { inputStream ->
+                                currentOutputFile.inputStream().use { inputStream ->
                                     inputStream.copyTo(outputStream)
                                 }
                             }
                             Log.d("RecordingViewModel", "Successfully copied to SAF: ${newFile.uri}")
                             // Delete the temporary file after successful copy
-                            outputFile!!.delete()
+                            currentOutputFile.delete()
                         } catch (e: Exception) {
                             Log.e("RecordingViewModel", "Error copying to SAF: ${e.message}", e)
                             _error.value = UiError.Dialog("Save Error", "Failed to save to selected location: ${e.message}")
@@ -139,11 +146,13 @@ class RecordingViewModel @JvmOverloads constructor(
                 } else {
                     _error.value = UiError.Dialog("Save Error", "Selected SAF location is not valid or writable.")
                 }
-            } else if (outputFile != null && outputFile!!.exists()) {
+            } else if (currentOutputFile != null && currentOutputFile.exists()) {
                 // If no SAF URI, but the file exists, it means it was saved to the Music directory.
-                Log.d("RecordingViewModel", "Recording saved to storage: ${outputFile!!.absolutePath}")
+                Log.d("RecordingViewModel", "Recording saved to storage: ${currentOutputFile.absolutePath}")
             }
-            outputFile = null // Clear the reference to the temporary file
+            if (outputFile == currentOutputFile) {
+                outputFile = null // Clear the reference only if it hasn't changed
+            }
         }
     }
 
